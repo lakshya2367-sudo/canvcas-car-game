@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bugatti Canvas Racer</title>
+
+<style>
+body{margin:0;overflow:hidden;background:#000;font-family:Arial}
+#score{position:fixed;top:10px;left:10px;color:#fff;font-size:18px;z-index:10}
+#gameOver{
+  position:fixed;inset:0;display:none;
+  background:rgba(0,0,0,.85);
+  color:#fff;z-index:20;
+  flex-direction:column;justify-content:center;align-items:center
+}
+#controls{
+  position:fixed;bottom:15px;width:100%;
+  display:flex;justify-content:center;gap:10px;z-index:15
+}
+#controls button{
+  width:55px;height:55px;border-radius:50%;
+  border:none;background:rgba(255,255,255,.25);
+  color:#fff;font-size:22px
+}
+#controls button:active{background:rgba(255,255,255,.5)}
+#speedometer{
+  position:fixed;right:15px;bottom:90px;
+  background:rgba(0,0,0,.4);border-radius:50%;z-index:15
+}
+</style>
+</head>
+
+<body>
+
+<div id="score">Score: 0</div>
+
+<div id="gameOver">
+  <h1>💥 Crash!</h1>
+  <h2 id="finalScore"></h2>
+  <button onclick="restart()">Try Again</button>
+</div>
+
+<canvas id="game"></canvas>
+
+<div id="controls">
+  <button id="left">◀</button>
+  <button id="right">▶</button>
+  <button id="accel">▲</button>
+  <button id="brake">■</button>
+  <button id="nitro">⚡</button>
+</div>
+
+<canvas id="speedometer" width="140" height="140"></canvas>
+
+<script>
+/* ================= SETUP ================= */
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+canvas.width=innerWidth; canvas.height=innerHeight;
+
+let speed=0.3;                 // game speed
+let score=0;
+let carX=canvas.width/2;
+let roadOffset=0;
+let curve=0, curveDir=1;
+let isDead=false;
+
+const MAX_KMPH=324;            // speedometer limit
+const MAX_SPEED=MAX_KMPH/200;  // internal game speed
+
+/* ================= INPUT ================= */
+const keys={};
+addEventListener("keydown",e=>keys[e.key]=true);
+addEventListener("keyup",e=>keys[e.key]=false);
+
+const touch={left:false,right:false,accel:false,brake:false,nitro:false};
+function bind(id,key){
+  const b=document.getElementById(id);
+  b.addEventListener("touchstart",e=>{e.preventDefault();touch[key]=true});
+  b.addEventListener("touchend",()=>touch[key]=false);
+}
+["left","right","accel","brake","nitro"].forEach(k=>bind(k,k));
+
+/* ================= TRAFFIC ================= */
+const traffic=[];
+function spawnTraffic(){
+  const lane=(Math.random()*0.6+0.2)*canvas.width;
+  traffic.push({x:lane,y:-100});
+}
+setInterval(spawnTraffic,1200);
+
+/* ================= DRAW ROAD (CURVED) ================= */
+function drawRoad(){
+  ctx.fillStyle="#222";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  curve+=0.002*curveDir;
+  if(Math.abs(curve)>0.6) curveDir*=-1;
+
+  const topW=canvas.width*0.15;
+  const botW=canvas.width*0.75;
+  const shift=curve*canvas.width*0.3;
+
+  ctx.fillStyle="#444";
+  ctx.beginPath();
+  ctx.moveTo((canvas.width-topW)/2+shift,0);
+  ctx.lineTo((canvas.width+topW)/2+shift,0);
+  ctx.lineTo((canvas.width+botW)/2-shift,canvas.height);
+  ctx.lineTo((canvas.width-botW)/2-shift,canvas.height);
+  ctx.fill();
+
+  ctx.strokeStyle="#fff"; ctx.lineWidth=2;
+  for(let i=0;i<20;i++){
+    let y=(i*80+roadOffset)%canvas.height;
+    let s=y/canvas.height;
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2+shift*s,y);
+    ctx.lineTo(canvas.width/2+shift*s,y+40*s);
+    ctx.stroke();
+  }
+}
+
+/* ================= DRAW CAR ================= */
+function drawCar(){
+  ctx.fillStyle="#0077ff";
+  ctx.fillRect(carX-20,canvas.height-100,40,80);
+  ctx.fillStyle="#0055aa";
+  ctx.fillRect(carX-15,canvas.height-85,30,40);
+}
+
+/* ================= DRAW TRAFFIC ================= */
+function drawTraffic(){
+  ctx.fillStyle="red";
+  for(let t of traffic){
+    ctx.fillRect(t.x-18,t.y,36,70);
+    t.y+=speed*25;
+  }
+}
+
+/* ================= SPEEDOMETER ================= */
+const sp=document.getElementById("speedometer");
+const spctx=sp.getContext("2d");
+
+function drawSpeedometer(){
+  spctx.clearRect(0,0,140,140);
+
+  spctx.strokeStyle="#fff"; spctx.lineWidth=4;
+  spctx.beginPath();
+  spctx.arc(70,70,60,Math.PI,0);
+  spctx.stroke();
+
+  const kmph=Math.min(Math.floor(speed*200),MAX_KMPH);
+  const angle=Math.PI+(kmph/MAX_KMPH)*Math.PI;
+
+  spctx.strokeStyle="red";
+  spctx.beginPath();
+  spctx.moveTo(70,70);
+  spctx.lineTo(70+Math.cos(angle)*50,70+Math.sin(angle)*50);
+  spctx.stroke();
+
+  spctx.fillStyle="#fff";
+  spctx.font="14px Arial";
+  spctx.fillText(kmph+" km/h",40,120);
+}
+
+/* ================= COLLISION ================= */
+function checkCollision(){
+  for(let t of traffic){
+    if(
+      Math.abs(t.x-carX)<30 &&
+      t.y>canvas.height-140 &&
+      t.y<canvas.height-40
+    ){
+      gameOver();
+    }
+  }
+}
+
+/* ================= LOOP ================= */
+function loop(){
+  if(isDead) return;
+
+  // SPEED
+  if(keys["ArrowUp"]||touch.accel) speed+=0.01;
+  if(keys["b"]||keys["B"]||touch.brake) speed-=0.04;
+  if(keys["Shift"]||touch.nitro) speed+=0.05;
+  speed=Math.max(0.2,Math.min(speed,MAX_SPEED));
+
+  // TURN (curve effect)
+  if(keys["ArrowLeft"]||touch.left) carX-=6+speed*10;
+  if(keys["ArrowRight"]||touch.right) carX+=6+speed*10;
+
+  drawRoad();
+  drawTraffic();
+  drawCar();
+
+  roadOffset+=speed*30;
+
+  // OFF ROAD
+  if(carX<canvas.width*0.1||carX>canvas.width*0.9) gameOver();
+
+  checkCollision();
+
+  score+=speed*0.3;
+  document.getElementById("score").innerText="Score: "+Math.floor(score);
+
+  drawSpeedometer();
+  requestAnimationFrame(loop);
+}
+loop();
+
+/* ================= GAME OVER ================= */
+function gameOver(){
+  isDead=true;
+  document.getElementById("finalScore").innerText="Final Score: "+Math.floor(score);
+  document.getElementById("gameOver").style.display="flex";
+}
+function restart(){
+  speed=0.3; score=0; carX=canvas.width/2;
+  traffic.length=0; isDead=false;
+  document.getElementById("gameOver").style.display="none";
+  loop();
+}
+
+addEventListener("resize",()=>{
+  canvas.width=innerWidth; canvas.height=innerHeight;
+});
+</script>
+</body>
+</html>
